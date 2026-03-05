@@ -15,8 +15,19 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
+# ---------- ENV ----------
+
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN not found")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL not found")
+
+
+# ---------- INIT ----------
 
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
@@ -42,24 +53,25 @@ async def init_db():
 
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users(
-        id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE
+            id SERIAL PRIMARY KEY,
+            telegram_id BIGINT UNIQUE
         )
         """)
 
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS habits(
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER,
-        name TEXT
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            name TEXT
         )
         """)
 
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS habit_logs(
-        id SERIAL PRIMARY KEY,
-        habit_id INTEGER,
-        date DATE
+            id SERIAL PRIMARY KEY,
+            habit_id INTEGER,
+            date DATE,
+            UNIQUE(habit_id,date)
         )
         """)
 
@@ -73,7 +85,13 @@ def main_menu():
     kb.add("➕ Добавить привычку")
     kb.add("📋 Мои привычки")
     kb.add("✅ Отметить выполнение")
+
     kb.add("📊 Статистика")
+    kb.add("🔥 Стрики")
+
+    kb.add("📅 Календарь")
+    kb.add("📈 График")
+
     kb.add("❌ Удалить привычку")
 
     return kb
@@ -91,7 +109,10 @@ async def start(msg: types.Message):
             msg.from_user.id
         )
 
-    await msg.answer("Трекер привычек готов", reply_markup=main_menu())
+    await msg.answer(
+        "Трекер привычек запущен 🚀",
+        reply_markup=main_menu()
+    )
 
 
 # ---------- ADD HABIT ----------
@@ -118,7 +139,7 @@ async def save_habit(msg: types.Message, state: FSMContext):
             user["id"], msg.text
         )
 
-    await msg.answer("Привычка добавлена", reply_markup=main_menu())
+    await msg.answer("Привычка добавлена ✅", reply_markup=main_menu())
     await state.finish()
 
 
@@ -136,6 +157,7 @@ async def my_habits(msg: types.Message):
         """, msg.from_user.id)
 
     if not habits:
+
         await msg.answer("У тебя пока нет привычек")
         return
 
@@ -144,7 +166,7 @@ async def my_habits(msg: types.Message):
     await msg.answer(text)
 
 
-# ---------- MARK ----------
+# ---------- TODAY WIDGET ----------
 
 @dp.message_handler(lambda m: m.text == "✅ Отметить выполнение")
 async def mark_menu(msg: types.Message):
@@ -179,9 +201,12 @@ async def mark_menu(msg: types.Message):
                 )
 
     if kb.inline_keyboard:
-        await msg.answer("Выбери привычку", reply_markup=kb)
+
+        await msg.answer("Сегодня нужно сделать:", reply_markup=kb)
+
     else:
-        await msg.answer("Сегодня всё выполнено")
+
+        await msg.answer("Сегодня всё выполнено 🎉")
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mark_"))
@@ -192,19 +217,66 @@ async def mark_done(call: types.CallbackQuery):
 
     async with pool.acquire() as conn:
 
-        exists = await conn.fetchrow("""
-        SELECT id FROM habit_logs
-        WHERE habit_id=$1 AND date=$2
+        await conn.execute("""
+        INSERT INTO habit_logs (habit_id,date)
+        VALUES ($1,$2)
+        ON CONFLICT DO NOTHING
         """, habit_id, today)
 
-        if not exists:
+    await call.answer("Готово ✅")
 
-            await conn.execute("""
-            INSERT INTO habit_logs (habit_id,date)
-            VALUES ($1,$2)
-            """, habit_id, today)
 
-    await call.answer("Отмечено")
+# ---------- STREAK ----------
+
+async def get_streak(habit_id):
+
+    async with pool.acquire() as conn:
+
+        rows = await conn.fetch("""
+        SELECT date
+        FROM habit_logs
+        WHERE habit_id=$1
+        ORDER BY date DESC
+        """, habit_id)
+
+    days = [r["date"] for r in rows]
+
+    today = datetime.date.today()
+
+    streak = 0
+
+    for i,day in enumerate(days):
+
+        if day == today - datetime.timedelta(days=i):
+
+            streak += 1
+        else:
+            break
+
+    return streak
+
+
+@dp.message_handler(lambda m: m.text == "🔥 Стрики")
+async def streaks(msg: types.Message):
+
+    async with pool.acquire() as conn:
+
+        habits = await conn.fetch("""
+        SELECT habits.id, habits.name
+        FROM habits
+        JOIN users ON habits.user_id = users.id
+        WHERE users.telegram_id=$1
+        """, msg.from_user.id)
+
+    text = ""
+
+    for habit in habits:
+
+        streak = await get_streak(habit["id"])
+
+        text += f"{habit['name']} — {streak} дней 🔥\n"
+
+    await msg.answer(text)
 
 
 # ---------- STATS ----------
@@ -214,7 +286,6 @@ async def stats(msg: types.Message):
 
     today = datetime.date.today()
     week_start = today - datetime.timedelta(days=6)
-    month_days = calendar.monthrange(today.year, today.month)[1]
 
     async with pool.acquire() as conn:
 
@@ -235,21 +306,153 @@ async def stats(msg: types.Message):
             WHERE habit_id=$1 AND date>=$2
             """, habit["id"], week_start)
 
-            month = await conn.fetchval("""
-            SELECT COUNT(*)
-            FROM habit_logs
-            WHERE habit_id=$1
-            AND EXTRACT(MONTH FROM date)=$2
-            """, habit["id"], today.month)
-
-            text += f"""
-{habit['name']}
-7 дней: {week}/7
-Месяц: {month}/{month_days}
-
-"""
+            text += f"{habit['name']} — {week}/7\n"
 
     await msg.answer(text)
+
+
+# ---------- CALENDAR ----------
+
+@dp.message_handler(lambda m: m.text == "📅 Календарь")
+async def calendar_menu(msg: types.Message):
+
+    async with pool.acquire() as conn:
+
+        habits = await conn.fetch("""
+        SELECT habits.id, habits.name
+        FROM habits
+        JOIN users ON habits.user_id = users.id
+        WHERE users.telegram_id=$1
+        """, msg.from_user.id)
+
+    kb = InlineKeyboardMarkup()
+
+    for habit in habits:
+
+        kb.add(
+            InlineKeyboardButton(
+                habit["name"],
+                callback_data=f"calendar_{habit['id']}"
+            )
+        )
+
+    await msg.answer("Выбери привычку", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("calendar_"))
+async def show_calendar(call: types.CallbackQuery):
+
+    habit_id = int(call.data.split("_")[1])
+
+    today = datetime.date.today()
+
+    cal = calendar.monthcalendar(today.year, today.month)
+
+    async with pool.acquire() as conn:
+
+        habit = await conn.fetchrow(
+            "SELECT name FROM habits WHERE id=$1",
+            habit_id
+        )
+
+        logs = await conn.fetch("""
+        SELECT date FROM habit_logs
+        WHERE habit_id=$1
+        """, habit_id)
+
+    done_days = {l["date"].day for l in logs}
+
+    text = f"{habit['name']} — {calendar.month_name[today.month]}\n\n"
+
+    text += "Mo Tu We Th Fr Sa Su\n"
+
+    for week in cal:
+
+        for day in week:
+
+            if day == 0:
+                text += "· "
+
+            elif day in done_days:
+                text += "✔ "
+
+            else:
+                text += "· "
+
+        text += "\n"
+
+    await call.message.answer(text)
+
+
+# ---------- GRAPH ----------
+
+@dp.message_handler(lambda m: m.text == "📈 График")
+async def graph(msg: types.Message):
+
+    today = datetime.date.today()
+
+    async with pool.acquire() as conn:
+
+        rows = await conn.fetch("""
+        SELECT date, COUNT(*)
+        FROM habit_logs
+        WHERE date > $1
+        GROUP BY date
+        ORDER BY date
+        """, today - datetime.timedelta(days=14))
+
+    text = "Последние 14 дней:\n\n"
+
+    for r in rows:
+
+        text += f"{r['date']} {'█'*r['count']}\n"
+
+    await msg.answer(text)
+
+
+# ---------- DELETE ----------
+
+@dp.message_handler(lambda m: m.text == "❌ Удалить привычку")
+async def delete_menu(msg: types.Message):
+
+    async with pool.acquire() as conn:
+
+        habits = await conn.fetch("""
+        SELECT habits.id, habits.name
+        FROM habits
+        JOIN users ON habits.user_id = users.id
+        WHERE users.telegram_id=$1
+        """, msg.from_user.id)
+
+    kb = InlineKeyboardMarkup()
+
+    for habit in habits:
+
+        kb.add(
+            InlineKeyboardButton(
+                f"Удалить {habit['name']}",
+                callback_data=f"del_{habit['id']}"
+            )
+        )
+
+    await msg.answer("Выбери привычку", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("del_"))
+async def delete_habit(call: types.CallbackQuery):
+
+    habit_id = int(call.data.split("_")[1])
+
+    async with pool.acquire() as conn:
+
+        await conn.execute("DELETE FROM habits WHERE id=$1", habit_id)
+
+        await conn.execute(
+            "DELETE FROM habit_logs WHERE habit_id=$1",
+            habit_id
+        )
+
+    await call.answer("Удалено")
 
 
 # ---------- REMINDER ----------
@@ -309,6 +512,8 @@ async def on_startup(dp):
     scheduler.start()
 
 
+# ---------- RUN ----------
+
 if __name__ == "__main__":
 
-    executor.start_polling(dp, on_startup=on_startup)
+    executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
