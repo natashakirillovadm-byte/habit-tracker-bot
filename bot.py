@@ -14,7 +14,8 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
-TOKEN = "8465064250:AAF9hZMyGpYLBCZL6dQejyXuNa2EsyeWRRE"
+import os
+TOKEN = os.getenv("BOT_TOKEN")
 DB = "habits.db"
 
 bot = Bot(token=TOKEN)
