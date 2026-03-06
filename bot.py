@@ -379,7 +379,7 @@ async def reminder():
 
             local_hour = (utc_now.hour + user["timezone"]) % 24
 
-            if local_hour != 21:
+            if local_hour not in [10, 21]:
                 continue
 
             habits = await conn.fetch("""
@@ -409,9 +409,15 @@ async def reminder():
 
             if kb.inline_keyboard:
 
+                text = (
+                    "Давай сделаем этот день чуть лучше"
+                    if local_hour == 10
+                    else "Не забудь заполнить трекер привычек"
+                )
+
                 await bot.send_message(
                     user["telegram_id"],
-                    "Не забудь заполнить трекер привычек",
+                    text,
                     reply_markup=kb
                 )
 
