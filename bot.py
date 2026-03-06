@@ -82,6 +82,48 @@ def main_menu():
     return kb
 
 
+async def build_today_widget(user_id):
+
+    today = datetime.date.today()
+
+    async with pool.acquire() as conn:
+
+        habits = await conn.fetch("""
+        SELECT id,name
+        FROM habits
+        WHERE user_id=$1
+        """, user_id)
+
+        kb = InlineKeyboardMarkup()
+
+        for habit in habits:
+
+            done = await conn.fetchrow("""
+            SELECT id FROM habit_logs
+            WHERE habit_id=$1 AND date=$2
+            """, habit["id"], today)
+
+            if done:
+
+                kb.add(
+                    InlineKeyboardButton(
+                        f"{habit['name']} | снять",
+                        callback_data=f"unmark_{habit['id']}"
+                    )
+                )
+
+            else:
+
+                kb.add(
+                    InlineKeyboardButton(
+                        f"{habit['name']} | выполнить",
+                        callback_data=f"mark_{habit['id']}"
+                    )
+                )
+
+    return kb
+
+
 @dp.message_handler(commands="start")
 async def start(msg: types.Message):
 
@@ -90,7 +132,7 @@ async def start(msg: types.Message):
     async with pool.acquire() as conn:
 
         await conn.execute("""
-        INSERT INTO users (telegram_id, timezone)
+        INSERT INTO users (telegram_id,timezone)
         VALUES ($1,$2)
         ON CONFLICT (telegram_id)
         DO UPDATE SET timezone=$2
@@ -174,50 +216,18 @@ async def get_streak(habit_id):
 
 
 @dp.message_handler(lambda m: m.text == "Отметить выполнение")
-async def mark_menu(msg: types.Message):
-
-    today = datetime.date.today()
+async def open_widget(msg: types.Message):
 
     async with pool.acquire() as conn:
 
-        habits = await conn.fetch("""
-        SELECT habits.id, habits.name
-        FROM habits
-        JOIN users ON habits.user_id = users.id
-        WHERE users.telegram_id=$1
-        """, msg.from_user.id)
+        user = await conn.fetchrow(
+            "SELECT id FROM users WHERE telegram_id=$1",
+            msg.from_user.id
+        )
 
-        kb = InlineKeyboardMarkup()
+    kb = await build_today_widget(user["id"])
 
-        for habit in habits:
-
-            done = await conn.fetchrow("""
-            SELECT id FROM habit_logs
-            WHERE habit_id=$1 AND date=$2
-            """, habit["id"], today)
-
-            if done:
-
-                kb.add(
-                    InlineKeyboardButton(
-                        f"{habit['name']} (снять)",
-                        callback_data=f"unmark_{habit['id']}"
-                    )
-                )
-
-            else:
-
-                kb.add(
-                    InlineKeyboardButton(
-                        habit["name"],
-                        callback_data=f"mark_{habit['id']}"
-                    )
-                )
-
-    if kb.inline_keyboard:
-        await msg.answer("Выбери привычку", reply_markup=kb)
-    else:
-        await msg.answer("Нет привычек")
+    await msg.answer("Привычки на сегодня", reply_markup=kb)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mark_"))
@@ -234,9 +244,22 @@ async def mark_done(call: types.CallbackQuery):
         ON CONFLICT DO NOTHING
         """, habit_id, today)
 
+        habit = await conn.fetchrow(
+            "SELECT name,user_id FROM habits WHERE id=$1",
+            habit_id
+        )
+
     streak = await get_streak(habit_id)
 
-    await call.message.answer(f"Отметка добавлена\nСерия: {streak} дней")
+    kb = await build_today_widget(habit["user_id"])
+
+    await call.message.edit_reply_markup(reply_markup=kb)
+
+    await call.answer()
+
+    await call.message.answer(
+        f"Отметка добавлена\nСерия: {streak} дней"
+    )
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("unmark_"))
@@ -251,6 +274,17 @@ async def unmark_done(call: types.CallbackQuery):
         DELETE FROM habit_logs
         WHERE habit_id=$1 AND date=$2
         """, habit_id, today)
+
+        habit = await conn.fetchrow(
+            "SELECT user_id FROM habits WHERE id=$1",
+            habit_id
+        )
+
+    kb = await build_today_widget(habit["user_id"])
+
+    await call.message.edit_reply_markup(reply_markup=kb)
+
+    await call.answer()
 
     await call.message.answer("Снял отметку выполнения")
 
