@@ -47,7 +47,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users(
             id SERIAL PRIMARY KEY,
             telegram_id BIGINT UNIQUE,
-            timezone INTEGER DEFAULT 0
+            timezone INTEGER DEFAULT 3
         )
         """)
 
@@ -127,7 +127,7 @@ async def build_today_widget(user_id):
 @dp.message_handler(commands="start")
 async def start(msg: types.Message):
 
-    tz = int(datetime.datetime.now().astimezone().utcoffset().total_seconds() / 3600)
+    tz = 3
 
     async with pool.acquire() as conn:
 
@@ -410,7 +410,7 @@ async def reminder():
             if kb.inline_keyboard:
 
                 text = (
-                    "Давай сделаем этот день чуть лучше"
+                    "Давай сделаем этот день чуть лучше\n\nОтметь привычки на сегодня"
                     if local_hour == 10
                     else "Не забудь заполнить трекер привычек"
                 )
@@ -428,7 +428,7 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reminder, "interval", minutes=60)
+    scheduler.add_job(reminder, "interval", minutes=10)
 
     scheduler.start()
 
