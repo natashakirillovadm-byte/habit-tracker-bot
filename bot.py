@@ -32,6 +32,15 @@ dp = Dispatcher(bot, storage=storage)
 pool = None
 
 
+# ТЕКСТ КНОПОК
+
+BTN_MARK = "⁎ Отметить выполнение ⁎"
+BTN_MY = "⁎ Мои привычки ⁎"
+BTN_STATS = "⁎ Статистика ⁎"
+BTN_ADD = "⁎ Добавить привычку ⁎"
+BTN_DELETE = "⁎ Удалить привычку ⁎"
+
+
 class AddHabit(StatesGroup):
     waiting_name = State()
 
@@ -78,11 +87,11 @@ def main_menu():
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
 
-    kb.add("Отметить выполнение")
-    kb.add("Мои привычки")
-    kb.add("Статистика")
-    kb.add("Добавить привычку")
-    kb.add("Удалить привычку")
+    kb.add(BTN_MARK)
+    kb.add(BTN_MY)
+    kb.add(BTN_STATS)
+    kb.add(BTN_ADD)
+    kb.add(BTN_DELETE)
 
     return kb
 
@@ -93,11 +102,10 @@ async def build_today_widget(user_id):
 
     async with pool.acquire() as conn:
 
-        habits = await conn.fetch("""
-        SELECT id,name
-        FROM habits
-        WHERE user_id=$1
-        """, user_id)
+        habits = await conn.fetch(
+            "SELECT id,name FROM habits WHERE user_id=$1",
+            user_id
+        )
 
         kb = InlineKeyboardMarkup()
 
@@ -143,10 +151,10 @@ async def start(msg: types.Message):
         DO UPDATE SET timezone=$2
         """, msg.from_user.id, tz)
 
-    await msg.answer("Трекер привычек запущен", reply_markup=main_menu())
+    await msg.answer("Трекер привычек запущен ♥", reply_markup=main_menu())
 
 
-@dp.message_handler(lambda m: m.text == "Добавить привычку")
+@dp.message_handler(lambda m: m.text == BTN_ADD)
 async def add_habit(msg: types.Message):
 
     await msg.answer("Напиши название привычки")
@@ -172,7 +180,7 @@ async def save_habit(msg: types.Message, state: FSMContext):
     await state.finish()
 
 
-@dp.message_handler(lambda m: m.text == "Мои привычки")
+@dp.message_handler(lambda m: m.text == BTN_MY)
 async def my_habits(msg: types.Message):
 
     async with pool.acquire() as conn:
@@ -198,8 +206,7 @@ async def get_streak(habit_id):
     async with pool.acquire() as conn:
 
         rows = await conn.fetch("""
-        SELECT date
-        FROM habit_logs
+        SELECT date FROM habit_logs
         WHERE habit_id=$1
         ORDER BY date DESC
         """, habit_id)
@@ -207,7 +214,6 @@ async def get_streak(habit_id):
     days = [r["date"] for r in rows]
 
     today = datetime.date.today()
-
     streak = 0
 
     for i, day in enumerate(days):
@@ -220,7 +226,7 @@ async def get_streak(habit_id):
     return streak
 
 
-@dp.message_handler(lambda m: m.text == "Отметить выполнение")
+@dp.message_handler(lambda m: m.text == BTN_MARK)
 async def open_widget(msg: types.Message):
 
     async with pool.acquire() as conn:
@@ -294,7 +300,7 @@ async def unmark_done(call: types.CallbackQuery):
     await call.message.answer("Снял отметку выполнения")
 
 
-@dp.message_handler(lambda m: m.text == "Статистика")
+@dp.message_handler(lambda m: m.text == BTN_STATS)
 async def stats(msg: types.Message):
 
     today = datetime.date.today()
@@ -333,7 +339,7 @@ async def stats(msg: types.Message):
     await msg.answer(text)
 
 
-@dp.message_handler(lambda m: m.text == "Удалить привычку")
+@dp.message_handler(lambda m: m.text == BTN_DELETE)
 async def delete_menu(msg: types.Message):
 
     async with pool.acquire() as conn:
@@ -380,7 +386,9 @@ async def reminder():
 
         async with pool.acquire() as conn:
 
-            users = await conn.fetch("SELECT id,telegram_id,timezone FROM users")
+            users = await conn.fetch(
+                "SELECT id,telegram_id,timezone FROM users"
+            )
 
             for user in users:
 
@@ -417,9 +425,9 @@ async def reminder():
                 if kb.inline_keyboard:
 
                     text = (
-                        "Давай сделаем этот день чуть лучше\n\nОтметь привычки на сегодня"
+                        "Давай сделаем этот день чуть лучше ♥\n\nОтметь привычки на сегодня"
                         if local_hour == 10
-                        else "Не забудь заполнить трекер привычек"
+                        else "Не забудь заполнить трекер привычек ♥"
                     )
 
                     await bot.send_message(
