@@ -52,6 +52,11 @@ async def init_db():
         """)
 
         await conn.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS timezone INTEGER DEFAULT 3
+        """)
+
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS habits(
             id SERIAL PRIMARY KEY,
             user_id INTEGER,
@@ -369,57 +374,63 @@ async def delete_habit(call: types.CallbackQuery):
 
 async def reminder():
 
-    utc_now = datetime.datetime.utcnow()
+    try:
 
-    async with pool.acquire() as conn:
+        utc_now = datetime.datetime.utcnow()
 
-        users = await conn.fetch("SELECT id,telegram_id,timezone FROM users")
+        async with pool.acquire() as conn:
 
-        for user in users:
+            users = await conn.fetch("SELECT id,telegram_id,timezone FROM users")
 
-            local_hour = (utc_now.hour + user["timezone"]) % 24
+            for user in users:
 
-            if local_hour not in [10, 21]:
-                continue
+                local_hour = (utc_now.hour + user["timezone"]) % 24
 
-            habits = await conn.fetch("""
-            SELECT id,name FROM habits
-            WHERE user_id=$1
-            """, user["id"])
+                if local_hour not in [10, 21]:
+                    continue
 
-            today = datetime.date.today()
+                habits = await conn.fetch("""
+                SELECT id,name FROM habits
+                WHERE user_id=$1
+                """, user["id"])
 
-            kb = InlineKeyboardMarkup()
+                today = datetime.date.today()
 
-            for habit in habits:
+                kb = InlineKeyboardMarkup()
 
-                done = await conn.fetchrow("""
-                SELECT id FROM habit_logs
-                WHERE habit_id=$1 AND date=$2
-                """, habit["id"], today)
+                for habit in habits:
 
-                if not done:
+                    done = await conn.fetchrow("""
+                    SELECT id FROM habit_logs
+                    WHERE habit_id=$1 AND date=$2
+                    """, habit["id"], today)
 
-                    kb.add(
-                        InlineKeyboardButton(
-                            habit["name"],
-                            callback_data=f"mark_{habit['id']}"
+                    if not done:
+
+                        kb.add(
+                            InlineKeyboardButton(
+                                habit["name"],
+                                callback_data=f"mark_{habit['id']}"
+                            )
                         )
+
+                if kb.inline_keyboard:
+
+                    text = (
+                        "Давай сделаем этот день чуть лучше\n\nОтметь привычки на сегодня"
+                        if local_hour == 10
+                        else "Не забудь заполнить трекер привычек"
                     )
 
-            if kb.inline_keyboard:
+                    await bot.send_message(
+                        user["telegram_id"],
+                        text,
+                        reply_markup=kb
+                    )
 
-                text = (
-                    "Давай сделаем этот день чуть лучше\n\nОтметь привычки на сегодня"
-                    if local_hour == 10
-                    else "Не забудь заполнить трекер привычек"
-                )
+    except Exception as e:
 
-                await bot.send_message(
-                    user["telegram_id"],
-                    text,
-                    reply_markup=kb
-                )
+        print("Reminder error:", e)
 
 
 async def on_startup(dp):
