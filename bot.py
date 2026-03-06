@@ -447,7 +447,7 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reminder, "cron", hour=21, minute=00)
+    scheduler.add_job(reminder, "cron", hour=22, minute=25)
 
     scheduler.start()
 
