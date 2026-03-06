@@ -15,8 +15,6 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
-# ---------- ENV ----------
-
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -27,8 +25,6 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL not found")
 
 
-# ---------- INIT ----------
-
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
@@ -36,13 +32,9 @@ dp = Dispatcher(bot, storage=storage)
 pool = None
 
 
-# ---------- FSM ----------
-
 class AddHabit(StatesGroup):
     waiting_name = State()
 
-
-# ---------- DATABASE ----------
 
 async def init_db():
 
@@ -54,7 +46,8 @@ async def init_db():
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users(
             id SERIAL PRIMARY KEY,
-            telegram_id BIGINT UNIQUE
+            telegram_id BIGINT UNIQUE,
+            timezone INTEGER DEFAULT 0
         )
         """)
 
@@ -76,42 +69,37 @@ async def init_db():
         """)
 
 
-# ---------- MENU ----------
-
 def main_menu():
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
 
-    kb.add("✅ Отметить выполнение")
-    kb.add("📋 Мои привычки")
-    kb.add("📊 Статистика")
-    kb.add("➕ Добавить привычку")
-    kb.add("❌ Удалить привычку")
+    kb.add("Отметить выполнение")
+    kb.add("Мои привычки")
+    kb.add("Статистика")
+    kb.add("Добавить привычку")
+    kb.add("Удалить привычку")
 
     return kb
 
 
-# ---------- START ----------
-
 @dp.message_handler(commands="start")
 async def start(msg: types.Message):
 
+    tz = int(datetime.datetime.now().astimezone().utcoffset().total_seconds() / 3600)
+
     async with pool.acquire() as conn:
 
-        await conn.execute(
-            "INSERT INTO users (telegram_id) VALUES ($1) ON CONFLICT DO NOTHING",
-            msg.from_user.id
-        )
+        await conn.execute("""
+        INSERT INTO users (telegram_id, timezone)
+        VALUES ($1,$2)
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET timezone=$2
+        """, msg.from_user.id, tz)
 
-    await msg.answer(
-        "Трекер привычек готов ✅",
-        reply_markup=main_menu()
-    )
+    await msg.answer("Трекер привычек запущен", reply_markup=main_menu())
 
 
-# ---------- ADD HABIT ----------
-
-@dp.message_handler(lambda m: m.text == "➕ Добавить привычку")
+@dp.message_handler(lambda m: m.text == "Добавить привычку")
 async def add_habit(msg: types.Message):
 
     await msg.answer("Напиши название привычки")
@@ -137,9 +125,7 @@ async def save_habit(msg: types.Message, state: FSMContext):
     await state.finish()
 
 
-# ---------- MY HABITS ----------
-
-@dp.message_handler(lambda m: m.text == "📋 Мои привычки")
+@dp.message_handler(lambda m: m.text == "Мои привычки")
 async def my_habits(msg: types.Message):
 
     async with pool.acquire() as conn:
@@ -152,16 +138,13 @@ async def my_habits(msg: types.Message):
         """, msg.from_user.id)
 
     if not habits:
-
-        await msg.answer("У тебя пока нет привычек")
+        await msg.answer("Привычек пока нет")
         return
 
-    text = "\n".join([f"• {h['name']}" for h in habits])
+    text = "\n".join([f"- {h['name']}" for h in habits])
 
     await msg.answer(text)
 
-
-# ---------- STREAK ----------
 
 async def get_streak(habit_id):
 
@@ -183,7 +166,6 @@ async def get_streak(habit_id):
     for i, day in enumerate(days):
 
         if day == today - datetime.timedelta(days=i):
-
             streak += 1
         else:
             break
@@ -191,9 +173,7 @@ async def get_streak(habit_id):
     return streak
 
 
-# ---------- MARK HABIT ----------
-
-@dp.message_handler(lambda m: m.text == "✅ Отметить выполнение")
+@dp.message_handler(lambda m: m.text == "Отметить выполнение")
 async def mark_menu(msg: types.Message):
 
     today = datetime.date.today()
@@ -216,7 +196,16 @@ async def mark_menu(msg: types.Message):
             WHERE habit_id=$1 AND date=$2
             """, habit["id"], today)
 
-            if not done:
+            if done:
+
+                kb.add(
+                    InlineKeyboardButton(
+                        f"{habit['name']} (снять)",
+                        callback_data=f"unmark_{habit['id']}"
+                    )
+                )
+
+            else:
 
                 kb.add(
                     InlineKeyboardButton(
@@ -226,12 +215,9 @@ async def mark_menu(msg: types.Message):
                 )
 
     if kb.inline_keyboard:
-
-        await msg.answer("Выбери привычку:", reply_markup=kb)
-
+        await msg.answer("Выбери привычку", reply_markup=kb)
     else:
-
-        await msg.answer("Сегодня всё выполнено 🎉")
+        await msg.answer("Нет привычек")
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("mark_"))
@@ -250,20 +236,31 @@ async def mark_done(call: types.CallbackQuery):
 
     streak = await get_streak(habit_id)
 
-    await call.answer()
-
-    await call.message.answer(
-        f"Отмечено ✅\n🔥 Серия: {streak} дней"
-    )
+    await call.message.answer(f"Отметка добавлена\nСерия: {streak} дней")
 
 
-# ---------- STATS ----------
+@dp.callback_query_handler(lambda c: c.data.startswith("unmark_"))
+async def unmark_done(call: types.CallbackQuery):
 
-@dp.message_handler(lambda m: m.text == "📊 Статистика")
+    habit_id = int(call.data.split("_")[1])
+    today = datetime.date.today()
+
+    async with pool.acquire() as conn:
+
+        await conn.execute("""
+        DELETE FROM habit_logs
+        WHERE habit_id=$1 AND date=$2
+        """, habit_id, today)
+
+    await call.message.answer("Снял отметку выполнения")
+
+
+@dp.message_handler(lambda m: m.text == "Статистика")
 async def stats(msg: types.Message):
 
     today = datetime.date.today()
     week_start = today - datetime.timedelta(days=6)
+
     month_days = calendar.monthrange(today.year, today.month)[1]
 
     async with pool.acquire() as conn:
@@ -297,9 +294,7 @@ async def stats(msg: types.Message):
     await msg.answer(text)
 
 
-# ---------- DELETE HABIT ----------
-
-@dp.message_handler(lambda m: m.text == "❌ Удалить привычку")
+@dp.message_handler(lambda m: m.text == "Удалить привычку")
 async def delete_menu(msg: types.Message):
 
     async with pool.acquire() as conn:
@@ -322,7 +317,7 @@ async def delete_menu(msg: types.Message):
             )
         )
 
-    await msg.answer("Выбери привычку для удаления", reply_markup=kb)
+    await msg.answer("Выбери привычку", reply_markup=kb)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("del_"))
@@ -338,22 +333,27 @@ async def delete_habit(call: types.CallbackQuery):
     await call.answer("Удалено")
 
 
-# ---------- REMINDER ----------
-
 async def reminder():
 
-    today = datetime.date.today()
+    utc_now = datetime.datetime.utcnow()
 
     async with pool.acquire() as conn:
 
-        users = await conn.fetch("SELECT id,telegram_id FROM users")
+        users = await conn.fetch("SELECT id,telegram_id,timezone FROM users")
 
         for user in users:
+
+            local_hour = (utc_now.hour + user["timezone"]) % 24
+
+            if local_hour != 21:
+                continue
 
             habits = await conn.fetch("""
             SELECT id,name FROM habits
             WHERE user_id=$1
             """, user["id"])
+
+            today = datetime.date.today()
 
             kb = InlineKeyboardMarkup()
 
@@ -377,12 +377,10 @@ async def reminder():
 
                 await bot.send_message(
                     user["telegram_id"],
-                    "Не забудь отметить привычки за сегодня",
+                    "Не забудь заполнить трекер привычек",
                     reply_markup=kb
                 )
 
-
-# ---------- STARTUP ----------
 
 async def on_startup(dp):
 
@@ -390,12 +388,10 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reminder, "cron", hour=21, minute=0)
+    scheduler.add_job(reminder, "interval", minutes=60)
 
     scheduler.start()
 
-
-# ---------- RUN ----------
 
 if __name__ == "__main__":
 
