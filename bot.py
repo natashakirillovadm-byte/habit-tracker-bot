@@ -447,7 +447,7 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.every().day.at("22:25").do(reminder)
+    scheduler.every().day.at("22:20").do(reminder)
 
     scheduler.start()
 
