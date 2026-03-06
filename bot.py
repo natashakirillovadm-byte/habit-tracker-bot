@@ -394,8 +394,8 @@ async def reminder():
 
                 local_hour = (utc_now.hour + user["timezone"]) % 24
 
-                if local_hour not in [10, 21]:
-                    continue
+                #if local_hour not in [10, 21]:
+                #    continue
 
                 habits = await conn.fetch("""
                 SELECT id,name FROM habits
@@ -447,7 +447,7 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reminder, "interval", minutes=10)
+    scheduler.every().day.at("22:25").do(reminder)
 
     scheduler.start()
 
