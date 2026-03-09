@@ -32,8 +32,6 @@ dp = Dispatcher(bot, storage=storage)
 pool = None
 
 
-# ТЕКСТ КНОПОК
-
 BTN_MARK = "⁎ Отметить выполнение ⁎"
 BTN_MY = "⁎ Мои привычки ⁎"
 BTN_STATS = "⁎ Статистика ⁎"
@@ -447,7 +445,7 @@ async def on_startup(dp):
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(reminder, "cron", hour=22, minute=25)
+    scheduler.add_job(reminder, "interval", minutes=10)
 
     scheduler.start()
 
